@@ -23,9 +23,10 @@ const pushBtn = $("pushBtn");
 const statusEl = $("status");
 
 let bgImage = null;
-let bgImageBase64 = null; // <-- то, что реально уйдёт на бэк
+let bgImageBase64 = null;
 let selectedMac = "";
-let selectedProfile = "nameplate10";
+let selectedProfile = "nameplate7";
+let loadDevicesToken = 0;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -60,7 +61,6 @@ function drawPreview() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (bgImage) {
-    // cover
     const cw = canvas.width, ch = canvas.height;
     const iw = bgImage.width, ih = bgImage.height;
     const cr = cw / ch, ir = iw / ih;
@@ -114,7 +114,7 @@ async function httpJson(url, opts = {}) {
   return data;
 }
 
-// ---- gateway/set (debounce) ----
+// ---------------- Debounce ----------------
 let gwTimer = null;
 function scheduleGatewaySet() {
   if (gwTimer) clearTimeout(gwTimer);
@@ -129,7 +129,7 @@ function scheduleGatewaySet() {
         body: JSON.stringify({ gateway_host: host, gateway_port: 5003 })
       });
       setStatus(`Шлюз установлен: ${host}:5003`);
-      await loadDevices(); // перезагрузим статусы/список
+      await loadDevices();
     } catch (e) {
       setStatus(`Ошибка gateway/set: ${e.message}`);
     }
@@ -138,7 +138,7 @@ function scheduleGatewaySet() {
 
 gwHost.addEventListener("input", scheduleGatewaySet);
 
-// ---- devices/list from devices.json ----
+// ---------------- DeviceList ----------------
 async function loadGatewayCurrent() {
   try {
     const gw = await httpJson(`${currentApi()}/gateway`);
@@ -149,11 +149,25 @@ async function loadGatewayCurrent() {
 }
 
 async function loadDevices() {
-  setStatus("Загружаю список табличек (devices.json) ...");
+  const myToken = ++loadDevicesToken;
+  setStatus("Загружаю список табличек...");
+
+  // ✅ всегда чистим список в начале
+  deviceSelect.innerHTML = `<option value="">ID таблички (загрузка)...</option>`;
+
   try {
     const data = await httpJson(`${currentApi()}/devices/list`);
+    if (myToken !== loadDevicesToken) return; // ✅ если пришёл старый ответ — игнор
+
+    if (data.gateway_reachable === false) {
+      deviceSelect.innerHTML = `<option value="">ID таблички (нет связи со шлюзом)...</option>`;
+      setStatus("Нет связи со шлюзом — список табличек скрыт. Проверьте сеть/шлюз.");
+      return;
+    }
+
     const list = data.devices || [];
 
+    // ✅ чистим и добавляем нормальную заглушку
     deviceSelect.innerHTML = `<option value="">ID таблички (выберите)...</option>`;
 
     for (const dev of list) {
@@ -174,8 +188,10 @@ async function loadDevices() {
     setStatus(`Список загружен. Показано: ${deviceSelect.options.length - 1} (из ${list.length}).`);
   } catch (e) {
     setStatus(`Ошибка devices/list: ${e.message}`);
+    deviceSelect.innerHTML = `<option value="">ID таблички (ошибка загрузки)...</option>`;
   }
 }
+
 
 
 function setMac(mac) {
@@ -244,7 +260,7 @@ bgFile.addEventListener("change", async () => {
 
   fileHint.textContent = `Файл: ${f.name}`;
 
-  // preview image
+  // ---------------- Preview ----------------
   const url = URL.createObjectURL(f);
   const img = new Image();
   img.onload = () => {
@@ -254,7 +270,6 @@ bgFile.addEventListener("change", async () => {
   };
   img.src = url;
 
-  // actual base64 for backend
   try {
     const dataUrl = await readFileAsDataURL(f);
     bgImageBase64 = dataURLToBase64(dataUrl);
@@ -301,7 +316,6 @@ async function push() {
 
     const sentSeq = data.sent_seq;
 
-    // ✅ Скрываем место сразу после успешного PUSH (для UX)
     try {
       await httpJson(`${api}/devices/mark_filled`, {
         method: "POST",
@@ -313,14 +327,12 @@ async function push() {
       deviceSelect.value = "";
       setMac("");
     } catch (eMark) {
-      // не критично для отправки, но важно увидеть
       setStatus(`PUSH ok (sent_seq=${sentSeq}), но не смог пометить filled: ${eMark.message}`);
       return;
     }
 
     setStatus(`PUSH ok. Табличка скрыта. sent_seq=${sentSeq}. Проверяю статус устройства...`);
 
-    // 🔁 Poll status до 5 попыток
     let last = null;
     for (let i = 1; i <= 5; i++) {
       await sleep(700);
@@ -345,7 +357,6 @@ async function push() {
       }
     }
 
-    // если так и не стало 1 — просто сообщаем
     if (last) {
       setStatus(`PUSH ok, место скрыто. Подтверждения не дождались: status=${last.status}.`);
     } else {
@@ -360,7 +371,7 @@ async function push() {
 
 pushBtn.addEventListener("click", push);
 
-// init
+// ---------------- Init ----------------
 if (!apiBase.value) apiBase.value = window.location.origin;
 drawPreview();
 loadGatewayCurrent().finally(loadDevices);

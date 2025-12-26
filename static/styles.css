@@ -36,7 +36,7 @@ body{
   font-weight:700; letter-spacing:.4px;
 }
 .brand img.logo {
-  width: 32px;  /* подбираем под высоту topbar */
+  width: 32px; 
   height: 32px;
   object-fit: contain;
 }

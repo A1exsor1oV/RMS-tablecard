@@ -1,5 +1,8 @@
 import base64
 import io
+import socket
+import subprocess
+import platform
 import json
 import os
 import re
@@ -111,7 +114,6 @@ def _image_from_base64(b64: str) -> Image.Image:
     return img
 
 def _draw_bg_cover(dst: Image.Image, bg: Image.Image) -> None:
-    # cover (как CSS background-size: cover)
     w, h = dst.size
     bg = bg.convert("RGBA")
 
@@ -120,12 +122,10 @@ def _draw_bg_cover(dst: Image.Image, bg: Image.Image) -> None:
     bg_ratio = bw / bh
 
     if bg_ratio > dst_ratio:
-        # обрезаем по ширине
         new_w = int(bh * dst_ratio)
         x0 = (bw - new_w) // 2
         crop = bg.crop((x0, 0, x0 + new_w, bh))
     else:
-        # обрезаем по высоте
         new_h = int(bw / dst_ratio)
         y0 = (bh - new_h) // 2
         crop = bg.crop((0, y0, bw, y0 + new_h))
@@ -137,10 +137,8 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
     prof = SIZE_PROFILES[req.profile]
     w, h, max_kb = prof["w"], prof["h"], prof["max_kb"]
 
-    # base canvas
     base = Image.new("RGBA", (w, h), (0, 0, 0, 255))
 
-    # background: image > color
     if req.background_image_base64:
         try:
             bg = _image_from_base64(req.background_image_base64)
@@ -160,7 +158,6 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
 
     lines = (tb.text or "").split("\n")
 
-    # measure block
     line_heights, line_widths = [], []
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
@@ -170,7 +167,7 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
     block_w = max(line_widths) if line_widths else 0
     block_h = sum(line_heights) + tb.line_spacing * max(0, len(lines) - 1)
 
-    # x
+    #x
     if tb.align == "left":
         x0 = tb.margin_x
     elif tb.align == "right":
@@ -201,7 +198,7 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
         draw.text((x, y), line, fill=fill, font=font)
         y += (line_heights[i] if i < len(line_heights) else 0) + tb.line_spacing
 
-    # JPEG encode with size control
+    # JPEG encode
     rgb = base.convert("RGB")
     q = 90
     best = None
@@ -220,6 +217,36 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
         best = bio.getvalue()
 
     return best, w, h
+
+def tcp_probe(ip: str, ports=(80, 443, 8080), timeout=0.35) -> bool:
+    if not ip:
+        return False
+    for p in ports:
+        try:
+            with socket.create_connection((ip, p), timeout=timeout):
+                return True
+        except OSError:
+            continue
+    return False
+
+def ping_probe(ip: str, timeout_ms: int = 600) -> bool:
+    if not ip:
+        return False
+
+    system = platform.system().lower()
+
+    if system == "windows":
+        # -n 1 = один пакет, -w timeout в мс
+        cmd = ["ping", "-n", "1", "-w", str(timeout_ms), ip]
+    else:
+        # -c 1 = один пакет, -W timeout в сек (целое)
+        cmd = ["ping", "-c", "1", "-W", str(max(1, timeout_ms // 1000)), ip]
+
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
+    except Exception:
+        return False
 
 # ---------------- API Models ----------------
 class TextBlock(BaseModel):
@@ -281,7 +308,6 @@ app = FastAPI(
     description="GUI + API: фон/текст -> JPEG -> TableCard Gateway",
 )
 
-# CORS чтобы не было Failed to fetch при любых схемах размещения UI/API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -301,7 +327,7 @@ def ui():
 def health():
     return {"status": "ok", "gateway": gateway_base()}
 
-# --- Gateway config endpoints ---
+# ---------------- Gateway config endpoints ----------------
 @app.get("/gateway")
 def gateway_get():
     return {"gateway_host": _gateway["host"], "gateway_port": _gateway["port"]}
@@ -313,39 +339,59 @@ def gateway_set(req: GatewaySetRequest):
     save_gateway_to_file()
     return {"status": "ok", "gateway": gateway_base()}
 
-# --- Devices list from devices.json (with optional online status from шлюза) ---
+# ---------------- Device list ----------------
 @app.get("/devices/list")
 def devices_list():
     cfg = _load_devices_json()
     allowed = cfg.get("devices", [])
-    # try to enrich with gateway online info
-    gw_list = {}
+
     try:
         payload = {"seq": 1, "type": "get_dev_list", "timestamp": now_ms()}
         data = gateway_post("/device/getDeviceList", payload)
-        for d in (data.get("message", {}).get("data", []) or []):
-            gw_list[norm_mac(d.get("mac", ""))] = d
-    except Exception:
-        pass
+        gw_devices = data.get("message", {}).get("data", []) or []
+    except Exception as e:
+        return {
+            "devices": [],
+            "gateway": gateway_base(),
+            "gateway_reachable": False,
+            "error": str(e),
+        }
+
+    gw_by_mac = {norm_mac(d.get("mac", "")): d for d in gw_devices}
 
     out = []
     for d in allowed:
         mac = norm_mac(d.get("mac", ""))
         if not mac:
             continue
-        gw = gw_list.get(mac, {})
+
+        gw = gw_by_mac.get(mac)
+        if not gw:
+            continue
+
+        status_local = d.get("status", "base")
+        if status_local != "base":
+            continue
+
+        ip = gw.get("IPAdd", "")
+        st_gw = (gw.get("Status", "") or "").lower()
+        online = ping_probe(ip)
+
+        if not online:
+            continue
+
         out.append({
             "mac": mac,
             "name": d.get("name", mac),
             "profile": d.get("profile", "nameplate10"),
-            "status_local": d.get("status", "base"), 
-            "ip": gw.get("IPAdd", ""),
-            "status_gateway": gw.get("Status", ""),   # online/offline
+            "ip": ip,
+            # статусы можно оставить для диагностики
+            "status_gateway": st_gw,
+            "status_local": status_local,
         })
 
-    return {"devices": out, "gateway": gateway_base()}
+    return {"devices": out, "gateway": gateway_base(), "gateway_reachable": True}
 
-# --- Keep raw sync too (если нужно) ---
 @app.post("/devices/sync")
 def devices_sync():
     payload = {"seq": 1, "type": "get_dev_list", "timestamp": now_ms()}
@@ -364,7 +410,6 @@ def render(req: RenderRequest):
 
 @app.post("/push", response_model=PushResponse)
 def push(req: PushRequest):
-    # нормализация MAC решает массу “магии” в шлюзе
     mac = norm_mac(req.mac)
 
     jpg, _, _ = render_to_jpg(req.render)
