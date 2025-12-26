@@ -1,0 +1,16 @@
+{
+  "devices": [
+    {
+      "mac": "d48afcefab38",
+      "name": "Табличка #1 (беспроводная)",
+      "profile": "nameplate7",
+      "status": "base"
+    },
+    {
+      "mac": "d0ef76563097",
+      "name": "Табличка #2 (проводная)",
+      "profile": "nameplate7",
+      "status": "base"
+    }
+  ]
+}

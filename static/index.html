@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RMS-COUVERT</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="/static/rms-logo.jpg" alt="RMS Logo" class="logo" />
+      <span class="title">RMS-COUVERT</span>
+    </div>
+
+    <nav class="nav">
+      <a class="navlink" href="/docs" target="_blank">Swagger</a>
+      <a class="navlink" href="/health" target="_blank">Health</a>
+      <a class="navlink" id="ipJsonLink" href="/devices/sync" target="_blank">IP JSON</a>
+    </nav>
+  </header>
+
+  <main class="page">
+    <section class="row row-top">
+      <div class="pill wide">
+        <div class="pill-label">Куда отправлять запросы:</div>
+        <input id="apiBase" class="pill-input" value="http://10.0.40.136:8000" />
+      </div>
+
+      <div class="pill gateway">
+        <div class="pill-label">Шлюз:</div>
+        <input id="gwHost" class="pill-input" value="10.30.30.253" />
+        <div class="pill-right">
+          <div class="pill-mini-label">порт</div>
+          <div class="pill-mini">5003</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="namewrap">
+        <input id="titleText" class="nameinput" value="ИВАНОВ И.И." />
+      </div>
+
+      <div class="controls">
+        <div class="ctrl ctrl-left">
+          <select id="deviceSelect" class="select">
+            <option value="">ID таблички (выберите)...</option>
+          </select>
+          <button id="refreshDevices" class="iconbtn" title="Обновить список табличек ⟳">⟳</button>
+        </div>
+
+        <div class="ctrl ctrl-mid">
+          <div class="macbadge">
+            <span class="maclabel">MAC:</span>
+            <span id="macValue" class="macvalue">?</span>
+          </div>
+        </div>
+
+        <div class="ctrl ctrl-right">
+          <input id="macManual" class="macmanual" placeholder="ИЛИ введите MAC вручную (например DO:EF:76:4A:...)" />
+          <button id="copyMac" class="iconbtn" title="Вставить MAC из поля справа в активный MAC">
+            ⤴
+          </button>
+        </div>
+      </div>
+
+      <div class="sliderrow">
+        <div class="sliderlabel">Размер шрифта</div>
+        <input id="fontSize" type="range" min="20" max="140" value="90" class="slider" />
+        <div id="fontSizeValue" class="slidervalue">90px</div>
+      </div>
+
+      <div class="uploadrow">
+        <label class="uploadbtn">
+          ВЫБРАТЬ ИЗОБРАЖЕНИЕ...
+          <input id="bgFile" type="file" accept="image/*" hidden />
+        </label>
+        <button id="pushBtn" class="pushbtn" title="Отправить на табличку">⤴</button>
+      </div>
+
+      <div class="filehint" id="fileHint">Файл: не выбран</div>
+
+      <div class="previewwrap">
+        <div class="previewtop">
+          <div class="previewtitle">Превью (фон + текст)</div>
+          <div class="previewmac">MAC: <span id="previewMac">—</span></div>
+        </div>
+        <div class="previewbox">
+          <canvas id="preview" width="1600" height="720"></canvas>
+        </div>
+      </div>
+
+      <div class="statusrow">
+        <div class="status" id="status">Готов.</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
