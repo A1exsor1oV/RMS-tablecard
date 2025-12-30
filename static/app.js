@@ -4,6 +4,7 @@ const apiBase = $("apiBase");
 const gwHost = $("gwHost");
 
 const titleText = $("titleText");
+const roleText = $("roleText");
 const deviceSelect = $("deviceSelect");
 const macValue = $("macValue");
 const previewMac = $("previewMac");
@@ -12,6 +13,18 @@ const copyMac = $("copyMac");
 
 const fontSize = $("fontSize");
 const fontSizeValue = $("fontSizeValue");
+
+const fioColor = $("fioColor");
+const fioBold = $("fioBold");
+const fioItalic = $("fioItalic");
+const fioUnderline = $("fioUnderline");
+const fioPosGrid = $("fioPosGrid");
+
+const roleColor = $("roleColor");
+const roleSize = $("roleSize");
+const roleSizeValue = $("roleSizeValue");
+const roleOffset = $("roleOffset");
+const roleOffsetValue = $("roleOffsetValue");
 
 const bgFile = $("bgFile");
 const fileHint = $("fileHint");
@@ -27,6 +40,19 @@ let bgImageBase64 = null;
 let selectedMac = "";
 let selectedProfile = "nameplate7";
 let loadDevicesToken = 0;
+
+const fioStyle = {
+  bold: false,
+  italic: false,
+  underline: false,
+  position: "center",
+  color: "#f3f5f7",
+};
+
+const roleStyle = {
+  color: "#e5e7eb",
+};
+
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -57,9 +83,86 @@ function readFileAsDataURL(file) {
   });
 }
 
+function wrapLines(text, maxWidth) {
+  const words = (text || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [" "];
+
+  const lines = [];
+  let line = "";
+
+  for (const w of words) {
+    const test = (line ? line + " " : "") + w;
+    const wpx = ctx.measureText(test).width;
+    if (wpx <= maxWidth || !line) {
+      line = test;
+    } else {
+      lines.push(line);
+      line = w;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function wrapFioSmart(fio, maxWidth, fontStr) {
+  const parts = (fio || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return [" "];
+
+  ctx.font = fontStr;
+  const oneLineW = ctx.measureText(parts.join(" ")).width;
+  if (oneLineW <= maxWidth) return [parts.join(" ")];
+
+  // правило: фамилия отдельно, остальное — на новую строку
+  if (parts.length >= 3) {
+    const line1 = parts[0];
+    const rest = parts.slice(1).join(" ");
+    // rest может быть длинным — доворрапим обычным способом
+    const restLines = wrapLines(rest, maxWidth);
+    return [line1, ...restLines];
+  }
+
+  // fallback
+  return wrapLines(parts.join(" "), maxWidth);
+}
+
+function fontString(sizePx, {bold=false, italic=false} = {}) {
+  const style = italic ? "italic " : "";
+  const weight = bold ? "900 " : "800 ";
+  // system fonts are fine for canvas preview; backend uses TTF
+  return `${style}${weight}${sizePx}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+}
+
+function calcAnchor(position) {
+  // returns [ax, ay] in 0..1 space where 0=left/top, 0.5=center, 1=right/bottom
+  switch (position) {
+    case "top-left": return [0, 0];
+    case "top": return [0.5, 0];
+    case "top-right": return [1, 0];
+    case "left": return [0, 0.5];
+    case "center": return [0.5, 0.5];
+    case "right": return [1, 0.5];
+    case "bottom-left": return [0, 1];
+    case "bottom": return [0.5, 1];
+    case "bottom-right": return [1, 1];
+    default: return [0.5, 0.5];
+  }
+}
+
+function drawUnderline(x, y, w, color, thickness=3) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = thickness;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + w, y);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawPreview() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // background
   if (bgImage) {
     const cw = canvas.width, ch = canvas.height;
     const iw = bgImage.width, ih = bgImage.height;
@@ -82,23 +185,93 @@ function drawPreview() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
-  const text = (titleText.value || "").trim();
-  const size = parseInt(fontSize.value, 10);
+  const margin = 48;
+  const maxWidth = canvas.width - margin * 2;
 
-  ctx.font = `800 ${size}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
-  ctx.fillStyle = "#f3f5f7";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+  const fio = (titleText.value || "").trim() || " ";
+  const fioSize = parseInt(fontSize.value, 10) || 90;
+
+  const role = (roleText?.value || "").trim();
+  const roleSizePx = parseInt(roleSize?.value, 10) || 64;
+  const roleOffsetPx = parseInt(roleOffset?.value, 10) || 18;
+
+  // Compose styles from UI
+  fioStyle.color = fioColor?.value || fioStyle.color;
+  roleStyle.color = roleColor?.value || roleStyle.color;
+
+  // Measure and wrap
+  const fioFontStr = fontString(fioSize, fioStyle);
+  const fioLines = wrapFioSmart(fio, maxWidth, fioFontStr);
+  ctx.font = fioFontStr;
+
+  ctx.font = fontString(roleSizePx, {bold:false, italic:false});
+  const roleLines = role ? wrapLines(role, maxWidth) : [];
+
+  // Line metrics (approx)
+  const fioLineH = Math.round(fioSize * 1.15);
+  const roleLineH = Math.round(roleSizePx * 1.15);
+
+  const blockH = fioLines.length * fioLineH + (roleLines.length ? (roleOffsetPx + roleLines.length * roleLineH) : 0);
+
+  // Determine block width as max line width
+  let blockW = 0;
+  ctx.font = fontString(fioSize, fioStyle);
+  for (const ln of fioLines) blockW = Math.max(blockW, ctx.measureText(ln).width);
+  ctx.font = fontString(roleSizePx, {bold:false, italic:false});
+  for (const ln of roleLines) blockW = Math.max(blockW, ctx.measureText(ln).width);
+
+  const [ax, ay] = calcAnchor(fioStyle.position || "center");
+  const x0 = Math.round(margin + (maxWidth - blockW) * ax);
+  const y0 = Math.round(margin + (canvas.height - margin * 2 - blockH) * ay);
+
+  // alignment per position
+  let align = "center";
+  if ((fioStyle.position || "").includes("left")) align = "left";
+  if ((fioStyle.position || "").includes("right")) align = "right";
+
+  // draw fio
+  ctx.save();
+  ctx.textBaseline = "top";
+  ctx.textAlign = align;
 
   ctx.shadowColor = "rgba(0,0,0,0.35)";
   ctx.shadowBlur = 6;
   ctx.shadowOffsetY = 2;
 
-  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  ctx.fillStyle = fioStyle.color;
+  ctx.font = fontString(fioSize, fioStyle);
 
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
+  let xText = x0;
+  if (align === "center") xText = x0 + blockW / 2;
+  if (align === "right") xText = x0 + blockW;
+
+  let y = y0;
+  for (const ln of fioLines) {
+    ctx.fillText(ln, xText, y);
+    if (fioStyle.underline) {
+      const w = ctx.measureText(ln).width;
+      const ux = align === "left" ? xText : (align === "center" ? xText - w / 2 : xText - w);
+      drawUnderline(ux, y + fioSize + 6, w, fioStyle.color, Math.max(2, Math.round(fioSize / 40)));
+    }
+    y += fioLineH;
+  }
+
+  // draw role
+  if (roleLines.length) {
+    y += roleOffsetPx;
+    ctx.shadowColor = "rgba(0,0,0,0.25)";
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 2;
+    ctx.fillStyle = roleStyle.color;
+    ctx.font = fontString(roleSizePx, {bold:false, italic:false});
+
+    for (const ln of roleLines) {
+      ctx.fillText(ln, xText, y);
+      y += roleLineH;
+    }
+  }
+
+  ctx.restore();
 }
 
 async function httpJson(url, opts = {}) {
@@ -176,7 +349,7 @@ async function loadDevices() {
       const mac = dev.mac;
       const name = dev.name || mac;
       const ip = dev.ip ? ` — ${dev.ip}` : "";
-      const profile = dev.profile || "nameplate10";
+      const profile = dev.profile || "nameplate7";
 
       const opt = document.createElement("option");
       opt.value = mac;
@@ -203,7 +376,7 @@ function setMac(mac) {
 deviceSelect.addEventListener("change", () => {
   setMac(deviceSelect.value);
   const opt = deviceSelect.selectedOptions?.[0];
-  selectedProfile = opt?.dataset?.profile || "nameplate10";
+  selectedProfile = opt?.dataset?.profile || "nameplate7";
 });
 
 copyMac.addEventListener("click", () => {
@@ -245,6 +418,52 @@ fontSize.addEventListener("input", () => {
   fontSizeValue.textContent = `${fontSize.value}px`;
   drawPreview();
 });
+
+// v3 controls
+function toggleBtn(btn, key){
+  btn.addEventListener("click", (e)=>{
+    e.preventDefault();
+    fioStyle[key] = !fioStyle[key];
+    btn.classList.toggle("active", fioStyle[key]);
+    drawPreview();
+  });
+}
+if (fioBold) toggleBtn(fioBold, "bold");
+if (fioItalic) toggleBtn(fioItalic, "italic");
+if (fioUnderline) toggleBtn(fioUnderline, "underline");
+if (fioColor) fioColor.addEventListener("input", drawPreview);
+
+function setPos(pos){
+  fioStyle.position = pos;
+  if (fioPosGrid){
+    fioPosGrid.querySelectorAll(".posbtn").forEach(b=>b.classList.toggle("active", b.dataset.pos===pos));
+  }
+  drawPreview();
+}
+if (fioPosGrid){
+  fioPosGrid.addEventListener("click", (e)=>{
+    const btn = e.target.closest(".posbtn");
+    if (!btn) return;
+    e.preventDefault();
+    setPos(btn.dataset.pos || "center");
+  });
+}
+
+if (roleText) roleText.addEventListener("input", drawPreview);
+if (roleColor) roleColor.addEventListener("input", drawPreview);
+if (roleSize){
+  roleSize.addEventListener("input", ()=>{
+    if (roleSizeValue) roleSizeValue.textContent = `${roleSize.value}px`;
+    drawPreview();
+  });
+}
+if (roleOffset){
+  roleOffset.addEventListener("input", ()=>{
+    if (roleOffsetValue) roleOffsetValue.textContent = `${roleOffset.value}px`;
+    drawPreview();
+  });
+}
+
 
 titleText.addEventListener("input", drawPreview);
 
@@ -294,15 +513,25 @@ async function push() {
   const req = {
     mac,
     render: {
-      profile: selectedProfile || "nameplate10",
+      profile: selectedProfile || "nameplate7",
       background: "#0B1220",
       background_image_base64: bgImageBase64 ? `data:image/png;base64,${bgImageBase64}` : null,
       text: {
-        text: (titleText.value || "").trim() || " ",
-        color: "#F3F5F7",
-        size: parseInt(fontSize.value, 10),
-        align: "center",
-        valign: "center",
+        fio: {
+          value: (titleText.value || "").trim() || " ",
+          color: fioColor ? fioColor.value : "#f3f5f7",
+          size: parseInt(fontSize.value, 10),
+          bold: !!fioStyle.bold,
+          italic: !!fioStyle.italic,
+          underline: !!fioStyle.underline,
+          position: fioStyle.position || "center",
+        },
+        title: {
+          value: (roleText?.value || "").trim() || "",
+          color: roleColor ? roleColor.value : "#e5e7eb",
+          size: roleSize ? parseInt(roleSize.value, 10) : 64,
+          offset_y: roleOffset ? parseInt(roleOffset.value, 10) : 18
+        }
       }
     }
   };
@@ -373,6 +602,11 @@ pushBtn.addEventListener("click", push);
 
 // ---------------- Init ----------------
 if (!apiBase.value) apiBase.value = window.location.origin;
+
+// init v3 values
+if (roleSizeValue && roleSize) roleSizeValue.textContent = `${roleSize.value}px`;
+if (roleOffsetValue && roleOffset) roleOffsetValue.textContent = `${roleOffset.value}px`;
+
 drawPreview();
 loadGatewayCurrent().finally(loadDevices);
 
@@ -387,3 +621,92 @@ refreshDevices.addEventListener("click", async () => {
   }
 });
 
+// -------- Config editor --------
+const configBtn = $("configBtn");
+const configModal = $("configModal");
+const configClose = $("configClose");
+const configTextarea = $("configTextarea");
+const configReload = $("configReload");
+const configSave = $("configSave");
+const configStatus = $("configStatus");
+
+function showConfigModal(show) {
+  if (show) {
+    configModal.classList.add("show");
+    configModal.setAttribute("aria-hidden", "false");
+  } else {
+    configModal.classList.remove("show");
+    configModal.setAttribute("aria-hidden", "true");
+  }
+}
+
+function setConfigStatus(msg) {
+  configStatus.textContent = msg;
+}
+
+async function loadConfigToEditor() {
+  try {
+    setConfigStatus("Загружаю devices.json...");
+    const cfg = await httpJson(`${currentApi()}/devices/file`);
+    configTextarea.value = JSON.stringify(cfg, null, 2);
+    setConfigStatus("Загружено.");
+  } catch (e) {
+    setConfigStatus(`Ошибка загрузки: ${e.message}`);
+  }
+}
+
+async function saveConfigFromEditor() {
+  let obj;
+  try {
+    obj = JSON.parse(configTextarea.value);
+  } catch (e) {
+    setConfigStatus(`JSON некорректен: ${e.message}`);
+    return;
+  }
+
+  if (!obj.gateway_host || typeof obj.gateway_host !== "string") {
+    setConfigStatus("Нужно поле gateway_host (строка).");
+    return;
+  }
+  if (!obj.gateway_port || typeof obj.gateway_port !== "number") {
+    setConfigStatus("Нужно поле gateway_port (число).");
+    return;
+  }
+
+  try {
+    setConfigStatus("Сохраняю...");
+    const obj = JSON.parse(configTextarea.value);
+    const res = await httpJson(`${currentApi()}/devices/file`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(obj)
+    });
+
+    if (res?.config?.gateway_host) gwHost.value = res.config.gateway_host;
+
+    setConfigStatus("Сохранено и применено.");
+    await loadDevices();
+  } catch (e) {
+    setConfigStatus(`Ошибка сохранения: ${e.message}`);
+  }
+}
+
+configBtn.addEventListener("click", async (e) => {
+  e.preventDefault();
+  showConfigModal(true);
+  await loadConfigToEditor();
+});
+
+configClose.addEventListener("click", () => showConfigModal(false));
+configModal.addEventListener("click", (e) => {
+  if (e.target === configModal) showConfigModal(false);
+});
+
+configReload.addEventListener("click", loadConfigToEditor);
+configSave.addEventListener("click", saveConfigFromEditor);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && configModal.classList.contains("show")) {
+    showConfigModal(false);
+  }
+});

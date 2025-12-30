@@ -8,7 +8,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import requests
 from fastapi import FastAPI, HTTPException
@@ -153,52 +153,176 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
 
     draw = ImageDraw.Draw(base)
 
-    tb = req.text
-    font = _load_font(tb.size)
+    def _font_path(bold: bool, italic: bool) -> str:
+        if os.name == "nt":
+            if bold and italic:
+                return "C:/Windows/Fonts/arialbi.ttf"
+            if bold:
+                return "C:/Windows/Fonts/arialbd.ttf"
+            if italic:
+                return "C:/Windows/Fonts/ariali.ttf"
+            return "C:/Windows/Fonts/arial.ttf"
+        # linux defaults
+        if bold and italic:
+            return "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
+        if bold:
+            return "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if italic:
+            return "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
+        return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
-    lines = (tb.text or "").split("\n")
+    def _load_font_style(size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
+        # If TC_FONT_PATH is set, always use it (legacy behavior)
+        if os.getenv("TC_FONT_PATH"):
+            return _load_font(size)
+        p = _font_path(bold, italic)
+        try:
+            return ImageFont.truetype(p, size=size)
+        except Exception:
+            return _load_font(size)
 
-    line_heights, line_widths = [], []
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        line_widths.append(bbox[2] - bbox[0])
-        line_heights.append(bbox[3] - bbox[1])
+    def _wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
+        text = (text or "").strip()
+        if not text:
+            return [" "]
+        words = re.split(r"\s+", text)
+        lines: List[str] = []
+        line = ""
+        for w_ in words:
+            cand = (line + " " + w_).strip() if line else w_
+            bbox = draw.textbbox((0, 0), cand, font=font)
+            if (bbox[2] - bbox[0]) <= max_width or not line:
+                line = cand
+            else:
+                lines.append(line)
+                line = w_
+        if line:
+            lines.append(line)
+        return lines
 
-    block_w = max(line_widths) if line_widths else 0
-    block_h = sum(line_heights) + tb.line_spacing * max(0, len(lines) - 1)
+    def _wrap_fio_smart(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
+        text = (text or "").strip()
+        if not text:
+            return [" "]
 
-    #x
-    if tb.align == "left":
-        x0 = tb.margin_x
-    elif tb.align == "right":
-        x0 = w - tb.margin_x - block_w
-    else:
-        x0 = (w - block_w) // 2
+        parts = re.split(r"\s+", text)
+        one = " ".join(parts)
+        bbox = draw.textbbox((0, 0), one, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            return [one]
 
-    # y
-    if tb.valign == "top":
-        y0 = tb.margin_y
-    elif tb.valign == "bottom":
-        y0 = h - tb.margin_y - block_h
-    else:
-        y0 = (h - block_h) // 2
+        if len(parts) >= 3:
+            line1 = parts[0]
+            rest = " ".join(parts[1:])
+            rest_lines = _wrap(rest, font, max_width)
+            return [line1] + rest_lines
 
-    # draw text
+        return _wrap(one, font, max_width)
+
+    def _anchor(position: str) -> Tuple[float, float]:
+        mp = {
+            "top-left": (0.0, 0.0),
+            "top": (0.5, 0.0),
+            "top-right": (1.0, 0.0),
+            "left": (0.0, 0.5),
+            "center": (0.5, 0.5),
+            "right": (1.0, 0.5),
+            "bottom-left": (0.0, 1.0),
+            "bottom": (0.5, 1.0),
+            "bottom-right": (1.0, 1.0),
+        }
+        return mp.get(position or "center", (0.5, 0.5))
+
+    def _align_from_position(position: str) -> Literal["left", "center", "right"]:
+        if "left" in (position or ""):
+            return "left"
+        if "right" in (position or ""):
+            return "right"
+        return "center"
+
+    fio = req.text.fio
+    title = req.text.title
+
+    margin = fio.margin
+    max_width = max(10, w - margin * 2)
+
+    fio_font = _load_font_style(fio.size, fio.bold, fio.italic)
+    fio_lines = _wrap_fio_smart(fio.value, fio_font, max_width)
+
+    title_lines: List[str] = []
+    title_font = None
+    if title and (title.value or "").strip():
+        title_font = _load_font_style(title.size, False, False)
+        title_lines = _wrap(title.value, title_font, max_width)
+
+    fio_line_h = int(fio.size * 1.15)
+    title_line_h = int((title.size if title else 0) * 1.15) if title_lines else 0
+
+    block_h = len(fio_lines) * fio_line_h
+    if title_lines:
+        block_h += title.offset_y + len(title_lines) * title_line_h
+
+    # width is max of line widths
+    block_w = 0
+    for ln in fio_lines:
+        bbox = draw.textbbox((0, 0), ln, font=fio_font)
+        block_w = max(block_w, bbox[2] - bbox[0])
+    if title_lines and title_font:
+        for ln in title_lines:
+            bbox = draw.textbbox((0, 0), ln, font=title_font)
+            block_w = max(block_w, bbox[2] - bbox[0])
+
+    ax, ay = _anchor(fio.position)
+    area_w = w - margin * 2
+    area_h = h - margin * 2
+    x0 = int(margin + (area_w - block_w) * ax)
+    y0 = int(margin + (area_h - block_h) * ay)
+
+    align = _align_from_position(fio.position)
+
+    def _x_for_align(base_x: int, width_: int) -> int:
+        if align == "left":
+            return base_x
+        if align == "right":
+            return base_x + width_
+        return base_x + width_ // 2
+
+    x_text = _x_for_align(x0, block_w)
+
+    # draw fio
     y = y0
-    fill = _hex_to_rgb(tb.color)
-    for i, line in enumerate(lines):
-        lw = line_widths[i] if i < len(line_widths) else 0
-        if tb.align == "left":
-            x = tb.margin_x
-        elif tb.align == "right":
-            x = w - tb.margin_x - lw
+    for ln in fio_lines:
+        bbox = draw.textbbox((0, 0), ln, font=fio_font)
+        ln_w = bbox[2] - bbox[0]
+        if align == "left":
+            lx = x_text
+        elif align == "right":
+            lx = x_text - ln_w
         else:
-            x = (w - lw) // 2
+            lx = x_text - ln_w // 2
+        draw.text((lx, y), ln, font=fio_font, fill=fio.color)
 
-        draw.text((x, y), line, fill=fill, font=font)
-        y += (line_heights[i] if i < len(line_heights) else 0) + tb.line_spacing
+        if fio.underline:
+            uy = y + fio.size + max(4, fio.size // 18)
+            draw.line((lx, uy, lx + ln_w, uy), fill=fio.color, width=max(2, fio.size // 40))
 
-    # JPEG encode
+        y += fio_line_h + fio.line_spacing
+
+    # draw title
+    if title_lines and title_font and title:
+        y += title.offset_y
+        for ln in title_lines:
+            bbox = draw.textbbox((0, 0), ln, font=title_font)
+            ln_w = bbox[2] - bbox[0]
+            if align == "left":
+                lx = x_text
+            elif align == "right":
+                lx = x_text - ln_w
+            else:
+                lx = x_text - ln_w // 2
+            draw.text((lx, y), ln, font=title_font, fill=title.color)
+            y += title_line_h + title.line_spacing
+
     rgb = base.convert("RGB")
     q = 90
     best = None
@@ -249,23 +373,45 @@ def ping_probe(ip: str, timeout_ms: int = 600) -> bool:
         return False
 
 # ---------------- API Models ----------------
-class TextBlock(BaseModel):
-    text: str = Field(..., min_length=1, max_length=200)
-    color: str = Field("#000000")
+class TextFio(BaseModel):
+    value: str = Field(..., min_length=1, max_length=220)
+    color: str = Field("#000000", description="HEX #RRGGBB")
+    size: int = Field(96, ge=10, le=220)
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    position: Literal[
+        "center",
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+    ] = "center"
+    margin: int = Field(48, ge=0, le=240)
+    line_spacing: int = Field(10, ge=0, le=80)
+
+class TextTitle(BaseModel):
+    value: str = Field("", max_length=220)
+    color: str = Field("#111827", description="HEX #RRGGBB")
     size: int = Field(64, ge=10, le=220)
-    align: Literal["left", "center", "right"] = "center"
-    valign: Literal["top", "center", "bottom"] = "center"
-    margin_x: int = Field(60, ge=0, le=400)
-    margin_y: int = Field(40, ge=0, le=300)
-    line_spacing: int = Field(10, ge=0, le=60)
+    offset_y: int = Field(18, ge=0, le=140)
+    line_spacing: int = Field(8, ge=0, le=80)
+
+class TextLayout(BaseModel):
+    fio: TextFio
+    title: Optional[TextTitle] = None
 
 class RenderRequest(BaseModel):
-    profile: Literal["nameplate7", "nameplate10"] = "nameplate10"
+    profile: Literal["nameplate7", "nameplate10"] = "nameplate7"
     background: str = Field("#FFFFFF", description="HEX #RRGGBB")
     background_image_base64: Optional[str] = Field(
         None, description="Опционально. Base64 картинки или data URL data:image/...;base64,..."
     )
-    text: TextBlock
+    text: TextLayout
 
 class RenderResponse(BaseModel):
     profile: str
@@ -300,6 +446,10 @@ class GatewaySetRequest(BaseModel):
 
 class MacRequest(BaseModel):
     mac: str
+
+class ConfigUpdate(BaseModel):
+    gateway_host: str
+    gateway_port: int = Field(5003, ge=1, le=65535)
 
 # ---------------- FastAPI ----------------
 app = FastAPI(
@@ -339,6 +489,23 @@ def gateway_set(req: GatewaySetRequest):
     save_gateway_to_file()
     return {"status": "ok", "gateway": gateway_base()}
 
+@app.get("/config")
+def config_get():
+    if CONFIG_PATH.exists():
+        try:
+            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {"gateway_host": _gateway["host"], "gateway_port": _gateway["port"]}
+    return {"gateway_host": _gateway["host"], "gateway_port": _gateway["port"]}
+
+@app.post("/config")
+def config_set(req: ConfigUpdate):
+    _gateway["host"] = req.gateway_host.strip()
+    _gateway["port"] = int(req.gateway_port)
+
+    save_gateway_to_file()
+
+    return {"status": "ok", "config": {"gateway_host": _gateway["host"], "gateway_port": _gateway["port"]}}
 # ---------------- Device list ----------------
 @app.get("/devices/list")
 def devices_list():
@@ -383,7 +550,7 @@ def devices_list():
         out.append({
             "mac": mac,
             "name": d.get("name", mac),
-            "profile": d.get("profile", "nameplate10"),
+            "profile": d.get("profile", "nameplate7"),
             "ip": ip,
             # статусы можно оставить для диагностики
             "status_gateway": st_gw,
@@ -467,5 +634,27 @@ def refresh_devices():
     DEVICES_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"status": "ok", "count": len(cfg.get("devices", []))}
 
+class DevicesFile(BaseModel):
+    devices: List[dict]
 
+@app.get("/devices/file")
+def devices_file_get():
+    return _load_devices_json()
+
+@app.post("/devices/file")
+def devices_file_set(req: DevicesFile):
+    # минимальная валидация + нормализация MAC
+    out = {"devices": []}
+    for d in req.devices:
+        mac = norm_mac(d.get("mac", ""))
+        if not mac:
+            continue
+        out["devices"].append({
+            "mac": mac,
+            "name": str(d.get("name", mac)),
+            "profile": d.get("profile", "nameplate10"),
+            "status": d.get("status", "base"),
+        })
+    DEVICES_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok", "count": len(out["devices"])}
 
