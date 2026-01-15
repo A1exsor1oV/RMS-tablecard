@@ -9,9 +9,8 @@
 </head>
 
 <body>
-  <!-- Top bar -->
   <header class="topbar">
-    <a href="/" class="brand" id="brandHome" title="На главную">
+    <a href="/" class="brand" title="На главную">
       <img src="/static/rms-logo.jpg" alt="RMS Logo" class="logo" />
       <span class="title">RMS-COUVERT</span>
     </a>
@@ -20,13 +19,13 @@
       <a class="navlink" href="#" id="configBtn">Config</a>
       <a class="navlink" href="/docs" target="_blank">Swagger</a>
       <a class="navlink" href="/health" target="_blank">Health</a>
-      <a class="navlink" id="ipJsonLink" href="/devices/sync" target="_blank">IP JSON</a>
+      <a class="navlink" href="/devices/sync" target="_blank">IP JSON</a>
     </nav>
   </header>
 
   <main class="page">
-    <section class="row row-top">
-      <div class="pill wide">
+    <section class="topgrid">
+      <div class="pill">
         <div class="pill-label">Куда отправлять запросы:</div>
         <input id="apiBase" class="pill-input" value="http://10.0.40.136:8000" />
       </div>
@@ -42,21 +41,19 @@
     </section>
 
     <section class="panel">
-      <!-- ФИО + Должность -->
+      <!-- ФИО / Должность поля -->
       <div class="namewrap">
         <input id="titleText" class="nameinput" value="ИВАНОВ И.И." />
-        <div class="rolewrap">
-          <input id="roleText" class="nameinput nameinput--role" placeholder="Должность (опционально)" value="Руководитель отдела разработки" />
-        </div>
+        <input id="roleText" class="nameinput nameinput--role" placeholder="Должность (опционально)" value="Руководитель отдела разработки" />
       </div>
 
-      <!-- Device controls -->
+      <!-- Контролы устройств -->
       <div class="controls">
         <div class="ctrl ctrl-left">
           <select id="deviceSelect" class="select">
             <option value="">ID таблички (выберите)...</option>
           </select>
-          <button id="refreshDevices" class="iconbtn" title="Обновить список табличек ⟳">⟳</button>
+          <button id="refreshDevices" class="iconbtn" title="Обновить список ⟳">⟳</button>
         </div>
 
         <div class="ctrl ctrl-mid">
@@ -67,15 +64,16 @@
         </div>
 
         <div class="ctrl ctrl-right">
-          <input id="macManual" class="macmanual" placeholder="ИЛИ введите MAC вручную (например DO:EF:76:4A:...)" />
+          <input id="macManual" class="macmanual" placeholder="ИЛИ введите MAC вручную (например DO:EF:76:...)" />
           <button id="copyMac" class="iconbtn" title="Вставить MAC из поля справа в активный MAC">⤴</button>
         </div>
       </div>
 
-      <!-- ✅ Текстовые настройки (ровный блок) -->
-      <div class="rowgrid">
-        <div class="rowcard">
-          <div class="rowcard-title">Стиль ФИО</div>
+      <!-- ✅ Панельки по макету: ФИО | Позиция | Должность -->
+      <div class="rowgrid3">
+        <!-- ФИО -->
+        <div class="rowcard rowcard-fio">
+          <div class="rowcard-title">ФИО</div>
           <div class="rowcard-body">
             <div class="stylerow">
               <label class="field">
@@ -83,38 +81,41 @@
                 <input id="fioColor" type="color" class="colorpick" value="#f3f5f7" />
               </label>
 
-              <div class="btnbar" aria-label="Стиль шрифта">
+              <div class="btnbar">
                 <button id="fioBold" class="tbtn" title="Жирный"><b>B</b></button>
                 <button id="fioItalic" class="tbtn" title="Курсив"><i>I</i></button>
                 <button id="fioUnderline" class="tbtn" title="Подчёркнутый"><u>U</u></button>
               </div>
             </div>
 
-            <div class="posrow">
-              <div class="poslabel">Позиция</div>
-              <div class="posgrid" id="fioPosGrid">
-                <button class="posbtn" data-pos="top-left" title="Левый верхний"></button>
-                <button class="posbtn" data-pos="top" title="Сверху"></button>
-                <button class="posbtn" data-pos="top-right" title="Правый верхний"></button>
-                <button class="posbtn" data-pos="left" title="Слева"></button>
-                <button class="posbtn active" data-pos="center" title="Центр"></button>
-                <button class="posbtn" data-pos="right" title="Справа"></button>
-                <button class="posbtn" data-pos="bottom-left" title="Левый нижний"></button>
-                <button class="posbtn" data-pos="bottom" title="Снизу"></button>
-                <button class="posbtn" data-pos="bottom-right" title="Правый нижний"></button>
-              </div>
-            </div>
-
-            <!-- ✅ Ползунок ФИО внутри карточки -->
             <div class="sliderrow compact">
-              <div class="sliderlabel">Размер ФИО</div>
+              <div class="sliderlabel">Размер</div>
               <input id="fontSize" type="range" min="20" max="140" value="90" class="slider" />
               <div id="fontSizeValue" class="slidervalue">90px</div>
             </div>
           </div>
         </div>
 
-        <div class="rowcard">
+        <!-- Позиция -->
+        <div class="rowcard rowcard-pos">
+          <div class="rowcard-title">Позиция</div>
+          <div class="rowcard-body">
+            <div class="posgrid posgrid-center" id="fioPosGrid">
+              <button class="posbtn" data-pos="top-left" title="Левый верхний"></button>
+              <button class="posbtn" data-pos="top" title="Сверху"></button>
+              <button class="posbtn" data-pos="top-right" title="Правый верхний"></button>
+              <button class="posbtn" data-pos="left" title="Слева"></button>
+              <button class="posbtn active" data-pos="center" title="Центр"></button>
+              <button class="posbtn" data-pos="right" title="Справа"></button>
+              <button class="posbtn" data-pos="bottom-left" title="Левый нижний"></button>
+              <button class="posbtn" data-pos="bottom" title="Снизу"></button>
+              <button class="posbtn" data-pos="bottom-right" title="Правый нижний"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Должность -->
+        <div class="rowcard rowcard-role">
           <div class="rowcard-title">Должность</div>
           <div class="rowcard-body">
             <div class="stylerow">
@@ -124,7 +125,7 @@
               </label>
 
               <label class="field field-grow">
-                <div class="field-label">Отступ вниз</div>
+                <div class="field-label">Отступ</div>
                 <input id="roleOffset" type="range" min="0" max="80" value="18" class="slider small" />
               </label>
 
@@ -132,13 +133,14 @@
             </div>
 
             <div class="sliderrow compact">
-              <div class="sliderlabel">Размер должности</div>
+              <div class="sliderlabel">Размер</div>
               <input id="roleSize" type="range" min="14" max="110" value="64" class="slider" />
               <div id="roleSizeValue" class="slidervalue">64px</div>
             </div>
           </div>
         </div>
       </div>
+
 
       <!-- Upload + push -->
       <div class="uploadrow">
