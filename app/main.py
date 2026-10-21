@@ -1,18 +1,11 @@
-import asyncio
 import base64
-import hashlib
-from contextlib import asynccontextmanager
 import io
-import logging
 import socket
 import subprocess
 import platform
 import json
 import os
 import re
-import stat
-import tempfile
-import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
@@ -22,40 +15,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
 
 # ---------------- Paths ----------------
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
 DEVICES_PATH = BASE_DIR / "devices.json"
-DISCOVERY_INTERVAL_SECONDS = 15
-_devices_lock = threading.RLock()
-_discovery_lock = threading.Lock()
-logger = logging.getLogger(__name__)
 
 # ---------------- Defaults ----------------
 DEFAULT_FONT_PATH = os.getenv(
     "TC_FONT_PATH",
     "C:/Windows/Fonts/arialbd.ttf" if os.name == "nt" else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 )
-
-# File names are server-owned: API callers select a family, never a file path.
-# Tuple order: regular, bold, italic, bold italic.
-FONT_FAMILIES = {
-    "arial": ("Arial", "C:/Windows/Fonts", ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf")),
-    "times": ("Times New Roman", "C:/Windows/Fonts", ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf")),
-    "georgia": ("Georgia", "C:/Windows/Fonts", ("georgia.ttf", "georgiab.ttf", "georgiai.ttf", "georgiaz.ttf")),
-    "verdana": ("Verdana", "C:/Windows/Fonts", ("verdana.ttf", "verdanab.ttf", "verdanai.ttf", "verdanaz.ttf")),
-    "courier": ("Courier New", "C:/Windows/Fonts", ("cour.ttf", "courbd.ttf", "couri.ttf", "courbi.ttf")),
-    "trebuchet": ("Trebuchet MS", "C:/Windows/Fonts", ("trebuc.ttf", "trebucbd.ttf", "trebucit.ttf", "trebucbi.ttf")),
-    "dejavu_sans": ("DejaVu Sans", "/usr/share/fonts/truetype/dejavu", ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf")),
-    "dejavu_serif": ("DejaVu Serif", "/usr/share/fonts/truetype/dejavu", ("DejaVuSerif.ttf", "DejaVuSerif-Bold.ttf", "DejaVuSerif-Italic.ttf", "DejaVuSerif-BoldItalic.ttf")),
-    "dejavu_mono": ("DejaVu Sans Mono", "/usr/share/fonts/truetype/dejavu", ("DejaVuSansMono.ttf", "DejaVuSansMono-Bold.ttf", "DejaVuSansMono-Oblique.ttf", "DejaVuSansMono-BoldOblique.ttf")),
-    "liberation_sans": ("Liberation Sans", "/usr/share/fonts/truetype/liberation2", ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf", "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf")),
-    "liberation_serif": ("Liberation Serif", "/usr/share/fonts/truetype/liberation2", ("LiberationSerif-Regular.ttf", "LiberationSerif-Bold.ttf", "LiberationSerif-Italic.ttf", "LiberationSerif-BoldItalic.ttf")),
-    "liberation_mono": ("Liberation Mono", "/usr/share/fonts/truetype/liberation2", ("LiberationMono-Regular.ttf", "LiberationMono-Bold.ttf", "LiberationMono-Italic.ttf", "LiberationMono-BoldItalic.ttf")),
-}
 
 SIZE_PROFILES = {
     "nameplate7":  {"w": 1024, "h": 600, "max_kb": 250},
@@ -98,86 +70,25 @@ def next_seq() -> int:
 def norm_mac(mac: str) -> str:
     return re.sub(r"[^0-9a-fA-F]", "", mac or "").lower()
 
-def device_mac(value) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F:\-.\s]+", value):
-        return ""
-    mac = norm_mac(value)
-    return mac if len(mac) == 12 else ""
-
 def _hex_to_rgb(h: str) -> Tuple[int, int, int]:
     h = (h or "").strip()
     if not h.startswith("#") or len(h) != 7:
         raise ValueError("Expected HEX color like #RRGGBB")
     return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
 
-def font_files(family: str) -> Tuple[Path, ...]:
-    if family == "default":
-        if os.getenv("TC_FONT_PATH"):
-            return (Path(DEFAULT_FONT_PATH),) * 4
-        family = "arial" if os.name == "nt" else "dejavu_sans"
-    entry = FONT_FAMILIES.get(family)
-    if entry is None:
-        raise HTTPException(status_code=422, detail="Неизвестный шрифт. Выберите шрифт из списка.")
-    _, directory, files = entry
-    return tuple(Path(directory) / filename for filename in files)
-
-def load_text_font(family: str, size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
-    path = font_files(family)[int(bold) + 2 * int(italic)]
+def _load_font(size: int) -> ImageFont.FreeTypeFont:
     try:
-        return ImageFont.truetype(str(path), size=size)
-    except OSError as exc:
-        raise HTTPException(status_code=422, detail="Выбранный шрифт недоступен на сервере. Выберите другой шрифт.") from exc
-
-def available_fonts() -> List[dict]:
-    result = []
-    for family in ("default", *FONT_FAMILIES):
-        try:
-            for path in font_files(family):
-                ImageFont.truetype(str(path), size=16)
-        except OSError:
-            continue
-        if family == "default":
-            label = Path(DEFAULT_FONT_PATH).stem if os.getenv("TC_FONT_PATH") else ("Arial" if os.name == "nt" else "DejaVu Sans")
-            label = f"По умолчанию ({label})"
-        else:
-            label = FONT_FAMILIES[family][0]
-        result.append({"id": family, "name": label})
-    return result
+        return ImageFont.truetype(DEFAULT_FONT_PATH, size=size)
+    except Exception:
+        return ImageFont.load_default()
 
 def _load_devices_json() -> Dict:
-    with _devices_lock:
-        if not DEVICES_PATH.exists():
-            return {"devices": []}
-        try:
-            cfg = json.loads(DEVICES_PATH.read_text(encoding="utf-8"))
-            if not isinstance(cfg, dict) or not isinstance(cfg.get("devices"), list):
-                raise ValueError("ожидается объект с массивом devices")
-            if any(not isinstance(d, dict) for d in cfg["devices"]):
-                raise ValueError("каждая табличка должна быть объектом")
-            return cfg
-        except (OSError, ValueError) as exc:
-            raise HTTPException(status_code=500, detail=f"Не удалось прочитать devices.json: {exc}") from exc
-
-def _save_devices_json(cfg: dict) -> None:
-    # Replace only a complete file; all read/modify/write operations hold this lock.
-    with _devices_lock:
-        temp_path = None
-        try:
-            mode = stat.S_IMODE(DEVICES_PATH.stat().st_mode) if DEVICES_PATH.exists() else 0o644
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=DEVICES_PATH.parent,
-                prefix=".devices-", suffix=".tmp", delete=False,
-            ) as output:
-                temp_path = Path(output.name)
-                json.dump(cfg, output, ensure_ascii=False, indent=2)
-                output.write("\n")
-                output.flush()
-                os.fsync(output.fileno())
-            os.chmod(temp_path, mode)
-            os.replace(temp_path, DEVICES_PATH)
-        finally:
-            if temp_path is not None and temp_path.exists():
-                temp_path.unlink()
+    if not DEVICES_PATH.exists():
+        return {"devices": []}
+    try:
+        return json.loads(DEVICES_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"devices": []}
 
 def gateway_post(path: str, payload: dict, timeout: float = 6.0) -> dict:
     url = f"{gateway_base()}{path}"
@@ -187,63 +98,6 @@ def gateway_post(path: str, payload: dict, timeout: float = 6.0) -> dict:
         return r.json()
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Gateway request failed: {e}")
-
-def gateway_devices() -> List[dict]:
-    data = gateway_post("/device/getDeviceList", {"seq": 1, "type": "get_dev_list", "timestamp": now_ms()})
-    message = data.get("message") if isinstance(data, dict) else None
-    devices = message.get("data") if isinstance(message, dict) else None
-    if not isinstance(devices, list):
-        raise HTTPException(status_code=502, detail="Шлюз вернул некорректный список табличек.")
-    return [d for d in devices if isinstance(d, dict) and device_mac(d.get("mac"))]
-
-def gateway_device_is_online(device: dict) -> bool:
-    # The gateway retains offline records whose former IP may belong to another MAC.
-    # A successful ping to that IP cannot establish that this device is online.
-    return str(device.get("Status", "")).strip().lower() == "online"
-
-def discover_devices() -> dict:
-    # Serialize manual and scheduled scans, without locking the file during HTTP I/O.
-    with _discovery_lock:
-        found = gateway_devices()
-        with _devices_lock:
-            cfg = _load_devices_json()
-            known = {device_mac(d.get("mac")) for d in cfg["devices"]}
-            added = []
-            for device in found:
-                if not gateway_device_is_online(device):
-                    continue
-                mac = device_mac(device["mac"])
-                if mac in known:
-                    continue
-                cfg["devices"].append({"mac": mac, "name": "", "profile": "nameplate7", "status": "base"})
-                known.add(mac)
-                added.append(mac)
-            if added:
-                _save_devices_json(cfg)
-            return {"status": "ok", "added": len(added), "macs": added, "total": len(cfg["devices"])}
-
-def discovery_loop(stop: threading.Event) -> None:
-    while not stop.is_set():
-        try:
-            result = discover_devices()
-            if result["added"]:
-                logger.info("Discovered %s new table cards", result["added"])
-        except HTTPException as exc:
-            logger.warning("Table card discovery: %s", exc.detail)
-        except Exception:
-            logger.exception("Table card discovery failed")
-        stop.wait(DISCOVERY_INTERVAL_SECONDS)
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    stop = threading.Event()
-    worker = threading.Thread(target=discovery_loop, args=(stop,), name="tablecard-discovery", daemon=True)
-    worker.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        await asyncio.to_thread(worker.join)
 
 def _image_from_base64(b64: str) -> Image.Image:
     """
@@ -298,6 +152,34 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
             raise HTTPException(status_code=400, detail=f"Invalid background color: {e}")
 
     draw = ImageDraw.Draw(base)
+
+    def _font_path(bold: bool, italic: bool) -> str:
+        if os.name == "nt":
+            if bold and italic:
+                return "C:/Windows/Fonts/arialbi.ttf"
+            if bold:
+                return "C:/Windows/Fonts/arialbd.ttf"
+            if italic:
+                return "C:/Windows/Fonts/ariali.ttf"
+            return "C:/Windows/Fonts/arial.ttf"
+        # linux defaults
+        if bold and italic:
+            return "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
+        if bold:
+            return "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if italic:
+            return "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
+        return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+    def _load_font_style(size: int, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
+        # If TC_FONT_PATH is set, always use it (legacy behavior)
+        if os.getenv("TC_FONT_PATH"):
+            return _load_font(size)
+        p = _font_path(bold, italic)
+        try:
+            return ImageFont.truetype(p, size=size)
+        except Exception:
+            return _load_font(size)
 
     def _wrap(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
         text = (text or "").strip()
@@ -364,13 +246,13 @@ def render_to_jpg(req) -> Tuple[bytes, int, int]:
     margin = fio.margin
     max_width = max(10, w - margin * 2)
 
-    fio_font = load_text_font(fio.font_family, fio.size, fio.bold, fio.italic)
+    fio_font = _load_font_style(fio.size, fio.bold, fio.italic)
     fio_lines = _wrap_fio_smart(fio.value, fio_font, max_width)
 
     title_lines: List[str] = []
     title_font = None
     if title and (title.value or "").strip():
-        title_font = load_text_font(title.font_family, title.size)
+        title_font = _load_font_style(title.size, False, False)
         title_lines = _wrap(title.value, title_font, max_width)
 
     fio_line_h = int(fio.size * 1.15)
@@ -493,7 +375,6 @@ def ping_probe(ip: str, timeout_ms: int = 600) -> bool:
 # ---------------- API Models ----------------
 class TextFio(BaseModel):
     value: str = Field(..., min_length=1, max_length=220)
-    font_family: str = Field("default", max_length=64)
     color: str = Field("#000000", description="HEX #RRGGBB")
     size: int = Field(96, ge=10, le=220)
     bold: bool = False
@@ -515,7 +396,6 @@ class TextFio(BaseModel):
 
 class TextTitle(BaseModel):
     value: str = Field("", max_length=220)
-    font_family: str = Field("default", max_length=64)
     color: str = Field("#111827", description="HEX #RRGGBB")
     size: int = Field(64, ge=10, le=220)
     offset_y: int = Field(18, ge=0, le=140)
@@ -539,12 +419,10 @@ class RenderResponse(BaseModel):
     height: int
     jpg_bytes: int
     jpg_base64: str
-    jpg_sha256: str
 
 class PushRequest(BaseModel):
     mac: str
     render: RenderRequest
-    expected_jpg_sha256: Optional[str] = Field(None, pattern=r"^[0-9a-f]{64}$")
 
 class PushResponse(BaseModel):
     mac: str
@@ -578,7 +456,6 @@ app = FastAPI(
     title="TableCard Control Microservice",
     version="0.2.0",
     description="GUI + API: фон/текст -> JPEG -> TableCard Gateway",
-    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -599,10 +476,6 @@ def ui():
 @app.get("/health")
 def health():
     return {"status": "ok", "gateway": gateway_base()}
-
-@app.get("/fonts")
-def fonts_list():
-    return {"fonts": available_fonts(), "default": "default"}
 
 # ---------------- Gateway config endpoints ----------------
 @app.get("/gateway")
@@ -636,43 +509,42 @@ def config_set(req: ConfigUpdate):
 # ---------------- Device list ----------------
 @app.get("/devices/list")
 def devices_list():
-    allowed = _load_devices_json()["devices"]
+    cfg = _load_devices_json()
+    allowed = cfg.get("devices", [])
+
     try:
-        gw_devices = gateway_devices()
+        payload = {"seq": 1, "type": "get_dev_list", "timestamp": now_ms()}
+        data = gateway_post("/device/getDeviceList", payload)
+        gw_devices = data.get("message", {}).get("data", []) or []
     except Exception as e:
         return {
             "devices": [],
             "gateway": gateway_base(),
             "gateway_reachable": False,
             "error": str(e),
-            "counts": {"registered": len(allowed)},
         }
 
-    gw_by_mac = {device_mac(d.get("mac")): d for d in gw_devices if gateway_device_is_online(d)}
+    gw_by_mac = {norm_mac(d.get("mac", "")): d for d in gw_devices}
 
     out = []
-    counts = {"registered": len(allowed), "filled": 0, "offline": 0, "unreachable": 0}
     for d in allowed:
         mac = norm_mac(d.get("mac", ""))
         if not mac:
             continue
 
-        status_local = d.get("status", "base")
-        if status_local != "base":
-            counts["filled"] += 1
-            continue
-
         gw = gw_by_mac.get(mac)
         if not gw:
-            counts["offline"] += 1
+            continue
+
+        status_local = d.get("status", "base")
+        if status_local != "base":
             continue
 
         ip = gw.get("IPAdd", "")
-        st_gw = str(gw.get("Status", "")).strip().lower()
+        st_gw = (gw.get("Status", "") or "").lower()
         online = ping_probe(ip)
 
         if not online:
-            counts["unreachable"] += 1
             continue
 
         out.append({
@@ -685,16 +557,12 @@ def devices_list():
             "status_local": status_local,
         })
 
-    return {"devices": out, "gateway": gateway_base(), "gateway_reachable": True, "counts": counts}
+    return {"devices": out, "gateway": gateway_base(), "gateway_reachable": True}
 
 @app.post("/devices/sync")
 def devices_sync():
     payload = {"seq": 1, "type": "get_dev_list", "timestamp": now_ms()}
     return gateway_post("/device/getDeviceList", payload)
-
-@app.post("/devices/discover")
-def devices_discover():
-    return discover_devices()
 
 @app.post("/render", response_model=RenderResponse)
 def render(req: RenderRequest):
@@ -705,7 +573,6 @@ def render(req: RenderRequest):
         height=h,
         jpg_bytes=len(jpg),
         jpg_base64=base64.b64encode(jpg).decode("ascii"),
-        jpg_sha256=hashlib.sha256(jpg).hexdigest(),
     )
 
 @app.post("/push", response_model=PushResponse)
@@ -713,8 +580,6 @@ def push(req: PushRequest):
     mac = norm_mac(req.mac)
 
     jpg, _, _ = render_to_jpg(req.render)
-    if req.expected_jpg_sha256 is not None and hashlib.sha256(jpg).hexdigest() != req.expected_jpg_sha256:
-        raise HTTPException(status_code=409, detail="Изображение изменилось. Обновите предпросмотр перед отправкой.")
     img_b64 = base64.b64encode(jpg).decode("ascii")
 
     seq = next_seq()
@@ -745,147 +610,32 @@ def push_status(req: PushStatusRequest):
 @app.post("/devices/mark_filled")
 def mark_filled(req: MacRequest):
     mac = norm_mac(req.mac)
-    with _devices_lock:
-        cfg = _load_devices_json()
-        for d in cfg["devices"]:
-            if norm_mac(d.get("mac", "")) == mac:
-                if d.get("status") != "filled":
-                    d["status"] = "filled"
-                    _save_devices_json(cfg)
-                return {"status": "ok", "mac": mac}
+    cfg = _load_devices_json()
+    found = False
+
+    for d in cfg.get("devices", []):
+        if norm_mac(d.get("mac", "")) == mac:
+            d["status"] = "filled"
+            found = True
+            break
+
+    if not found:
         raise HTTPException(status_code=404, detail="MAC not found in devices.json")
+
+    DEVICES_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok", "mac": mac}
     
 @app.post("/devices/refresh")
 def refresh_devices():
-    with _devices_lock:
-        cfg = _load_devices_json()
-        for d in cfg["devices"]:
-            d["status"] = "base"
-        _save_devices_json(cfg)
-        return {"status": "ok", "count": len(cfg["devices"])}
+    cfg = _load_devices_json()
+    for d in cfg.get("devices", []):
+        d["status"] = "base"
 
-class DeviceRecord(BaseModel):
-    mac: str
-    name: str = ""
-    profile: Literal["nameplate7", "nameplate10"] = "nameplate7"
-    status: Literal["base", "filled"] = "base"
-
-    @field_validator("mac")
-    @classmethod
-    def valid_mac(cls, value: str) -> str:
-        mac = device_mac(value)
-        if not mac:
-            raise ValueError("MAC должен содержать 12 шестнадцатеричных цифр")
-        return mac
+    DEVICES_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok", "count": len(cfg.get("devices", []))}
 
 class DevicesFile(BaseModel):
-    devices: List[DeviceRecord]
-    base_devices: List[DeviceRecord]
-
-    @field_validator("devices", "base_devices")
-    @classmethod
-    def unique_macs(cls, devices):
-        if len({d.mac for d in devices}) != len(devices):
-            raise ValueError("MAC-адреса табличек не должны повторяться")
-        return devices
-
-class DeviceNameEdit(BaseModel):
-    model_config = {"extra": "forbid"}
-    mac: str
-    name: str = Field(max_length=120)
-    base_name: str
-
-    @field_validator("mac")
-    @classmethod
-    def valid_mac(cls, value: str) -> str:
-        mac = device_mac(value)
-        if not mac:
-            raise ValueError("MAC должен содержать 12 шестнадцатеричных цифр")
-        return mac
-
-    @field_validator("name")
-    @classmethod
-    def trim_name(cls, value: str) -> str:
-        return value.strip()
-
-class DeviceNamesUpdate(BaseModel):
-    model_config = {"extra": "forbid"}
-    changes: List[DeviceNameEdit]
-
-    @field_validator("changes")
-    @classmethod
-    def unique_macs(cls, changes):
-        if len({d.mac for d in changes}) != len(changes):
-            raise ValueError("MAC-адреса табличек не должны повторяться")
-        return changes
-
-def device_names(cfg: dict) -> List[dict]:
-    return [{"mac": device_mac(d.get("mac")), "name": d.get("name", "")} for d in cfg["devices"]]
-
-@app.get("/devices/names")
-def devices_names_get():
-    return {"devices": device_names(_load_devices_json())}
-
-@app.post("/devices/names")
-def devices_names_set(req: DeviceNamesUpdate):
-    with _devices_lock:
-        cfg = _load_devices_json()
-        by_mac = {device_mac(d.get("mac")): d for d in cfg["devices"]}
-        # Check the entire batch before changing anything; statuses/discovery stay intact.
-        for edit in req.changes:
-            current = by_mac.get(edit.mac)
-            if current is None:
-                raise HTTPException(status_code=409, detail=f"Табличка {edit.mac} удалена. Обновите список.")
-            if current.get("name", "") not in (edit.base_name, edit.name):
-                raise HTTPException(status_code=409, detail=f"Название таблички {edit.mac} уже изменено другим оператором. Обновите список; ваши правки остаются в окне.")
-        changed = False
-        for edit in req.changes:
-            if by_mac[edit.mac].get("name", "") != edit.name:
-                by_mac[edit.mac]["name"] = edit.name
-                changed = True
-        if changed:
-            _save_devices_json(cfg)
-        return {"status": "ok", "devices": device_names(cfg)}
-
-def merge_device_edits(base: List[dict], edited: List[dict], current: List[dict]) -> List[dict]:
-    base_by_mac = {d["mac"]: d for d in base}
-    current_by_mac = {d["mac"]: d for d in current}
-    edited_by_mac = {d["mac"]: d for d in edited}
-
-    def conflict(mac):
-        raise HTTPException(status_code=409, detail=(
-            f"Табличка {mac} изменена после открытия Config. "
-            "Ваш текст сохранён в редакторе. Скопируйте правки и перезагрузите список перед повторным сохранением."
-        ))
-
-    for mac, old in base_by_mac.items():
-        if mac not in edited_by_mac and mac in current_by_mac and current_by_mac[mac] != old:
-            conflict(mac)
-
-    merged = []
-    for edit in edited:
-        mac = edit["mac"]
-        old = base_by_mac.get(mac)
-        latest = current_by_mac.get(mac)
-        if latest is None:
-            if old is None:
-                merged.append(edit)
-            elif edit != old:
-                conflict(mac)
-            continue
-        # A concurrently discovered MAC may also have been entered manually.
-        if old is None:
-            old = DeviceRecord(mac=mac).model_dump()
-        result = dict(latest)
-        for field in ("name", "profile", "status"):
-            if edit[field] != old[field]:
-                if latest[field] != old[field] and latest[field] != edit[field]:
-                    conflict(mac)
-                result[field] = edit[field]
-        merged.append(result)
-
-    merged.extend(d for d in current if d["mac"] not in base_by_mac and d["mac"] not in edited_by_mac)
-    return merged
+    devices: List[dict]
 
 @app.get("/devices/file")
 def devices_file_get():
@@ -893,19 +643,18 @@ def devices_file_get():
 
 @app.post("/devices/file")
 def devices_file_set(req: DevicesFile):
-    with _devices_lock:
-        cfg = _load_devices_json()
-        try:
-            current = [DeviceRecord(**d).model_dump() for d in cfg["devices"]]
-            if len({d["mac"] for d in current}) != len(current):
-                raise ValueError("MAC-адреса повторяются")
-        except ValueError as exc:
-            raise HTTPException(status_code=500, detail=f"Некорректный devices.json: {exc}") from exc
-        merged = merge_device_edits(
-            [d.model_dump() for d in req.base_devices], [d.model_dump() for d in req.devices], current,
-        )
-        if merged != cfg["devices"]:
-            cfg["devices"] = merged
-            _save_devices_json(cfg)
-        return {"status": "ok", "count": len(merged), "devices": merged}
+    # минимальная валидация + нормализация MAC
+    out = {"devices": []}
+    for d in req.devices:
+        mac = norm_mac(d.get("mac", ""))
+        if not mac:
+            continue
+        out["devices"].append({
+            "mac": mac,
+            "name": str(d.get("name", mac)),
+            "profile": d.get("profile", "nameplate10"),
+            "status": d.get("status", "base"),
+        })
+    DEVICES_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "ok", "count": len(out["devices"])}
 
