@@ -2,13 +2,13 @@
   "devices": [
     {
       "mac": "d48afcefab38",
-      "name": "Табличка #1 (беспроводная)",
+      "name": "Беспроводная №1",
       "profile": "nameplate7",
-      "status": "base"
+      "status": "filled"
     },
     {
       "mac": "d0ef76563097",
-      "name": "Табличка #2 (проводная)",
+      "name": "Проводная №1",
       "profile": "nameplate7",
       "status": "base"
     }

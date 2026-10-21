@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>RMS-COUVERT</title>
-  <link rel="stylesheet" href="/static/styles.css" />
-  <script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="/static/styles.css?v=20261021-controls" />
+  <script src="/static/app.js?v=20261021-controls" defer></script>
 </head>
 
 <body>
@@ -16,30 +16,11 @@
     </a>
 
     <nav class="nav">
-      <a class="navlink" href="#" id="configBtn">Config</a>
-      <a class="navlink" href="/docs" target="_blank">Swagger</a>
-      <a class="navlink" href="/health" target="_blank">Health</a>
-      <a class="navlink" href="/devices/sync" target="_blank">IP JSON</a>
+      <button class="navlink" type="button" id="namesBtn">Таблички</button>
     </nav>
   </header>
 
   <main class="page">
-    <section class="topgrid">
-      <div class="pill">
-        <div class="pill-label">Куда отправлять запросы:</div>
-        <input id="apiBase" class="pill-input" value="http://10.0.40.136:8000" />
-      </div>
-
-      <div class="pill gateway">
-        <div class="pill-label">Шлюз:</div>
-        <input id="gwHost" class="pill-input" value="10.30.30.253" />
-        <div class="pill-right">
-          <div class="pill-mini-label">порт</div>
-          <div class="pill-mini">5003</div>
-        </div>
-      </div>
-    </section>
-
     <section class="panel">
       <!-- ФИО / Должность поля -->
       <div class="namewrap">
@@ -53,7 +34,7 @@
           <select id="deviceSelect" class="select">
             <option value="">ID таблички (выберите)...</option>
           </select>
-          <button id="refreshDevices" class="iconbtn" title="Обновить список ⟳">⟳</button>
+          <button id="refreshDevices" class="iconbtn" title="Вернуть все таблички в список (сбросить filled)" aria-label="Вернуть все таблички в список">⟳</button>
         </div>
 
         <div class="ctrl ctrl-mid">
@@ -63,11 +44,13 @@
           </div>
         </div>
 
-        <div class="ctrl ctrl-right">
-          <input id="macManual" class="macmanual" placeholder="ИЛИ введите MAC вручную (например DO:EF:76:...)" />
-          <button id="copyMac" class="iconbtn" title="Вставить MAC из поля справа в активный MAC">⤴</button>
+        <div class="ctrl ctrl-discovery">
+          <button id="discoverDevices" class="discoverybtn">Найти новые таблички</button>
+          <span class="discovery-hint">Автопоиск каждые 15 секунд</span>
         </div>
       </div>
+
+      <div id="deviceListHint" class="device-list-hint" role="status">Проверяю связь со шлюзом…</div>
 
       <!-- ✅ Панельки по макету: ФИО | Позиция | Должность -->
       <div class="rowgrid3">
@@ -75,6 +58,10 @@
         <div class="rowcard rowcard-fio">
           <div class="rowcard-title">ФИО</div>
           <div class="rowcard-body">
+            <label class="font-field" for="fioFont">
+              <span class="field-label">Шрифт</span>
+              <select id="fioFont" class="font-select" disabled><option value="default">По умолчанию</option></select>
+            </label>
             <div class="stylerow">
               <label class="field">
                 <div class="field-label">Цвет</div>
@@ -118,6 +105,10 @@
         <div class="rowcard rowcard-role">
           <div class="rowcard-title">Должность</div>
           <div class="rowcard-body">
+            <label class="font-field" for="roleFont">
+              <span class="field-label">Шрифт</span>
+              <select id="roleFont" class="font-select" disabled><option value="default">По умолчанию</option></select>
+            </label>
             <div class="stylerow">
               <label class="field">
                 <div class="field-label">Цвет</div>
@@ -141,6 +132,7 @@
         </div>
       </div>
 
+      <div id="fontStatus" class="filehint" role="status" hidden></div>
 
       <!-- Upload + push -->
       <div class="uploadrow">
@@ -148,7 +140,7 @@
           ВЫБРАТЬ ИЗОБРАЖЕНИЕ...
           <input id="bgFile" type="file" accept="image/*" hidden />
         </label>
-        <button id="pushBtn" class="pushbtn" title="Отправить на табличку">⤴</button>
+        <button id="pushBtn" class="pushbtn" title="Отправить на табличку" disabled>⤴</button>
       </div>
 
       <div class="filehint" id="fileHint">Файл: не выбран</div>
@@ -156,41 +148,47 @@
       <!-- Preview -->
       <div class="previewwrap">
         <div class="previewtop">
-          <div class="previewtitle">Превью (фон + текст)</div>
+          <div class="previewtitle">Предпросмотр таблички</div>
           <div class="previewmac">MAC: <span id="previewMac">—</span></div>
         </div>
-        <div class="previewbox">
-          <canvas id="preview" width="1600" height="720"></canvas>
+        <div class="previewbox" id="previewBox" aria-busy="true">
+          <img id="preview" width="1024" height="600" alt="Изображение для отправки на табличку" hidden />
+        </div>
+        <div class="previewinfo">
+          <span id="previewStatus" role="status">Подготавливаю предпросмотр…</span>
+          <button id="previewRetry" type="button" hidden>Повторить</button>
         </div>
       </div>
 
-      <div class="statusrow">
-        <div class="status" id="status">Готов.</div>
-      </div>
     </section>
   </main>
 
-  <!-- Modal: devices.json editor -->
-  <div class="modal" id="configModal" aria-hidden="true">
+  <div id="notice" class="notice" role="status" hidden>
+    <span id="noticeText"></span>
+    <button id="noticeClose" type="button" aria-label="Закрыть уведомление">×</button>
+  </div>
+
+  <!-- Operator device names -->
+  <div class="modal" id="namesModal" role="dialog" aria-modal="true" aria-labelledby="namesTitle" aria-hidden="true">
     <div class="modal-card">
       <div class="modal-head">
-        <div class="modal-title">Редактирование devices.json</div>
-        <button class="modal-x" id="configClose" title="Закрыть">×</button>
+        <div class="modal-title" id="namesTitle">Таблички</div>
+        <button class="modal-x" id="namesClose" title="Закрыть" aria-label="Закрыть">×</button>
       </div>
 
       <div class="modal-body">
         <div class="modal-hint">
-          Формат: <b>{"devices":[{"mac","name","profile","status"}...]}</b>
+          Задайте названия новым табличкам, сверяя MAC-адреса. Таблички без названия находятся в начале списка.
         </div>
 
-        <textarea id="configTextarea" class="modal-textarea" spellcheck="false"></textarea>
+        <div id="namesList" class="names-list"></div>
 
         <div class="modal-actions">
-          <button class="modal-btn" id="configReload">Перезагрузить</button>
-          <button class="modal-btn primary" id="configSave">Сохранить</button>
+          <button class="modal-btn" id="namesReload">Обновить список</button>
+          <button class="modal-btn primary" id="namesSave" disabled>Сохранить названия</button>
         </div>
 
-        <div class="modal-status" id="configStatus">Готов.</div>
+        <div class="modal-status" id="namesStatus" role="status">Загружаю таблички…</div>
       </div>
     </div>
   </div>

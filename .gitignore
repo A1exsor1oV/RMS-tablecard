@@ -1,0 +1,20 @@
+# Local Python environments and caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local settings and temporary files
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+*.log
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db

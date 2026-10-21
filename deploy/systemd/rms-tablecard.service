@@ -1,0 +1,19 @@
+[Unit]
+Description=RMS TableCard web interface and API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=rms-tablecard
+Group=rms-tablecard
+WorkingDirectory=/opt/rms-tablecard
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/rms-tablecard/venv/bin/python -m uvicorn main:app --app-dir /opt/rms-tablecard/app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

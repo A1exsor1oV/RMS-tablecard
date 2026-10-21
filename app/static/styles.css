@@ -36,6 +36,10 @@ body{
 
 .nav{ display:flex; gap:18px; font-weight:600; }
 .navlink{
+  background:transparent;
+  border:0;
+  font:inherit;
+  cursor:pointer;
   color:#fff; text-decoration:none; opacity:.95;
   border-bottom:2px solid transparent;
   padding:2px 0;
@@ -123,14 +127,15 @@ body{
 .controls{
   width: min(980px, 100%);
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   gap:12px;
   flex-wrap: wrap;
 }
 .ctrl{ display:flex; align-items:center; gap:12px; min-width: 0; }
 .ctrl-left{ flex: 1 1 320px; }
 .ctrl-mid{ flex: 0 0 auto; }
-.ctrl-right{ flex: 1 1 320px; }
+.ctrl-discovery{ flex:1 1 240px; flex-direction:column; align-items:stretch; gap:6px; }
+.discovery-hint{ color:#26354a; font-size:12px; text-align:center; }
 
 .select{
   flex:1;
@@ -161,19 +166,6 @@ body{
 .maclabel{ opacity:.9; }
 .macvalue{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
-.macmanual{
-  flex:1;
-  min-width: 220px;
-  height:38px;
-  border-radius:8px;
-  border:0;
-  background:#5f646c;
-  color:#fff;
-  padding:0 12px;
-  outline:none;
-  font-weight:700;
-}
-
 .iconbtn{
   width:42px;
   height:38px;
@@ -185,6 +177,18 @@ body{
   cursor:pointer;
 }
 .iconbtn:hover{ filter: brightness(1.08); }
+
+.discoverybtn{
+  min-height:38px;
+  padding:10px 14px;
+  border:0;
+  border-radius:8px;
+  background:#0f3a55;
+  color:#fff;
+  font-weight:700;
+  cursor:pointer;
+}
+button:disabled{ opacity:.55; cursor:wait; }
 
 .rowgrid3{
   width: min(980px, 100%);
@@ -223,6 +227,21 @@ body{
 .field{ display:flex; flex-direction:column; gap:6px; }
 .field-grow{ flex:1; min-width: 200px; }
 .field-label{ font-size:12px; opacity:.85; font-weight:800; color:#1b2b44; }
+.font-field{ display:flex; flex-direction:column; gap:6px; }
+.font-select{
+  width:100%;
+  min-width:0;
+  height:36px;
+  padding:0 10px;
+  border:1px solid rgba(0,0,0,.16);
+  border-radius:8px;
+  background:#f3f5f7;
+  color:#1b2b44;
+  font:inherit;
+  font-size:14px;
+}
+.device-list-hint{ width:min(980px, 100%); font-size:13px; color:#2a3a52; }
+.device-list-hint[data-error="true"]{ color:#a22525; font-weight:600; }
 
 .colorpick{
   width: 54px;
@@ -347,7 +366,7 @@ body{
   font-weight:700;
 }
 .previewbox{
-  border-radius:10px;
+  aspect-ratio: 1024 / 600;
   overflow:hidden;
   background: #0b1220;
   box-shadow: 0 2px 0 rgba(0,0,0,.12);
@@ -356,20 +375,36 @@ body{
   width: 100%;
   height: auto;
   display:block;
-  background: linear-gradient(180deg, #111a2a, #0b1220);
 }
-
-/* Status */
-.statusrow{ width: min(980px, 100%); }
-.status{
-  background: rgba(255,255,255,.55);
-  border: 1px solid rgba(0,0,0,.08);
-  padding:10px 12px;
-  border-radius:10px;
-  width:100%;
-  font-weight:700;
+#preview[hidden]{ display:none; }
+.previewinfo{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:32px;
+  font-size:12px;
   color:#1b2b44;
 }
+
+/* Transient action feedback */
+.notice{
+  position:fixed;
+  top:68px;
+  right:18px;
+  z-index:10000;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  max-width:min(460px, calc(100% - 36px));
+  padding:12px 16px;
+  border-radius:10px;
+  background:#0f3a55;
+  color:#fff;
+  box-shadow:0 4px 18px rgba(0,0,0,.18);
+}
+.notice[hidden]{ display:none; }
+.notice[data-error="true"]{ background:#8c2929; }
+#noticeClose{ border:0; background:transparent; color:inherit; font-size:22px; cursor:pointer; }
 
 /* -------- Modal -------- */
 .modal{
@@ -386,6 +421,9 @@ body{
 
 .modal-card{
   width: min(880px, 100%);
+  max-height:calc(100dvh - 32px);
+  display:flex;
+  flex-direction:column;
   border-radius: 14px;
   background: #ffffff;
   box-shadow: 0 18px 60px rgba(0,0,0,.25);
@@ -418,7 +456,23 @@ body{
   display:flex;
   flex-direction:column;
   gap: 10px;
+  min-height:0;
 }
+.names-list{ overflow:auto; min-height:60px; }
+.name-row{
+  display:grid;
+  grid-template-columns:190px minmax(0, 1fr);
+  align-items:center;
+  gap:16px;
+  padding:12px 0;
+  border-bottom:1px solid #e0e5eb;
+}
+.name-identity{ display:flex; flex-direction:column; gap:4px; }
+.name-mac{ font-family:ui-monospace, Consolas, monospace; font-size:14px; }
+.name-new{ color:#0f3a55; font-size:12px; font-weight:700; }
+.name-input{ width:100%; padding:10px 12px; border:1px solid #bcc7d1; border-radius:8px; font:inherit; }
+.name-input:focus, .font-select:focus{ outline:2px solid #397a9f; outline-offset:1px; }
+@media(max-width:520px){ .name-row{ grid-template-columns:1fr; gap:8px; } }
 .modal-hint{
   font-size: 13px;
   color: #22314a;
@@ -489,8 +543,7 @@ body{
       "role";
   }
   .controls{ gap:10px; }
-  .ctrl-left, .ctrl-right{ flex: 1 1 100%; }
-  .macmanual{ min-width: 160px; }
+  .ctrl-left{ flex: 1 1 100%; }
 }
 
 /* Корректировочные стили, потом переделаю */
